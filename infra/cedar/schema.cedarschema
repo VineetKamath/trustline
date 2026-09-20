@@ -1,0 +1,58 @@
+namespace Trustline {
+  entity Verifier = {
+    registered: Bool,
+    allowedPurposes: Set<String>,
+  };
+  entity Issuer = {
+    registered: Bool,
+    allowedCredentialTypes: Set<CredentialType>,
+  };
+  entity Holder = {
+    trustlineId: String,
+  };
+  entity Claim = {
+    supported: Bool,
+    unit: String,
+  };
+  entity CredentialType;
+  entity Credential = {
+    issuer: Issuer,
+    holder: Holder,
+  };
+  entity VerificationRequest = {
+    subject: Holder,
+    verifier: Verifier,
+    status: String,
+  };
+
+  action RequestPredicateProof appliesTo {
+    principal: Verifier,
+    resource: Claim,
+    context: {
+      operator: String,
+      threshold: Long,
+      purpose: String,
+      disclosure: String,
+    },
+  };
+  action RequestFullHistory, RequestIdentity, RequestRawValue appliesTo {
+    principal: Verifier,
+    resource: Claim,
+    context: {
+      purpose: String,
+      disclosure: String,
+    },
+  };
+  action ApproveVerification appliesTo {
+    principal: Holder,
+    resource: VerificationRequest,
+  };
+  action IssueCredential appliesTo {
+    principal: Issuer,
+    resource: CredentialType,
+  };
+  action RevokeCredential appliesTo {
+    principal: [Issuer, Holder],
+    resource: Credential,
+  };
+}

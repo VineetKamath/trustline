@@ -1,0 +1,263 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Trustline — AWS infrastructure (deployment scaffold). Provisions encryption,
+  data, identity, authorization, the Strands agent, and optionally an Amazon
+  Managed Blockchain (Hyperledger Fabric) network. The Next.js app itself is
+  deployed separately (AWS Amplify Hosting or OpenNext on Lambda) and uses the
+  outputs below as environment variables. Not yet validated against a live account.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-sonnet-4-20250514-v1:0
+  CreateBlockchainNetwork:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Amazon Managed Blockchain incurs hourly charges; enable explicitly.
+  FabricAdminUsername:
+    Type: String
+    Default: trustlineadmin
+  FabricAdminPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Required only when CreateBlockchainNetwork=true.
+
+Conditions:
+  WithBlockchain: !Equals [!Ref CreateBlockchainNetwork, "true"]
+
+Resources:
+  # ── Encryption ──────────────────────────────────────────────────────────
+  DataKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Trustline data encryption key (DynamoDB, S3, secrets)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdmin
+            Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root" }
+            Action: "kms:*"
+            Resource: "*"
+
+  AppSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub trustline/${Stage}/app
+      KmsKeyId: !Ref DataKey
+      GenerateSecretString:
+        SecretStringTemplate: "{}"
+        GenerateStringKey: SESSION_SECRET
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # ── Application state (off-chain) ───────────────────────────────────────
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub trustline-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: gsi1pk, AttributeType: S }
+        - { AttributeName: gsi2pk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: gsi1
+          KeySchema:
+            - { AttributeName: gsi1pk, KeyType: HASH }
+            - { AttributeName: SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: gsi2
+          KeySchema:
+            - { AttributeName: gsi2pk, KeyType: HASH }
+            - { AttributeName: SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref DataKey
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ── Encrypted off-chain evidence ────────────────────────────────────────
+  EvidenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref DataKey
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      VersioningConfiguration: { Status: Enabled }
+
+  EvidenceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EvidenceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt EvidenceBucket.Arn
+              - !Sub "${EvidenceBucket.Arn}/*"
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ── Application login (separate from Trustline identity) ────────────────
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub trustline-${Stage}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy: { MinimumLength: 10, RequireLowercase: true, RequireNumbers: true, RequireUppercase: true }
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+
+  # ── Authorization (Cedar) ───────────────────────────────────────────────
+  PolicyStore:
+    Type: AWS::VerifiedPermissions::PolicyStore
+    Properties:
+      Description: Trustline authorization policies (upload with scripts/upload-avp.sh)
+      ValidationSettings: { Mode: STRICT }
+
+  # ── Strands agent (natural language → structured request) ───────────────
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../services/strands-agent/
+      Handler: agent.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 30
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        # The agent can call the model — and nothing else. No data, no secrets.
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+              Resource: "*"
+      Events:
+        Interpret:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AgentApi
+            Path: /interpret
+            Method: POST
+
+  AgentApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+
+  # ── Least-privilege role for the Trustline API (Lambda) ─────────────────
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: trustline-app
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query, dynamodb:BatchWriteItem]
+                Resource: [!GetAtt Table.Arn, !Sub "${Table.Arn}/index/*"]
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub "${EvidenceBucket.Arn}/evidence/*"
+              - Effect: Allow
+                Action: [kms:Encrypt, kms:Decrypt, kms:GenerateDataKey]
+                Resource: !GetAtt DataKey.Arn
+              - Effect: Allow
+                Action: [verifiedpermissions:IsAuthorized]
+                Resource: !GetAtt PolicyStore.Arn
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: !Ref AppSecrets
+
+  # ── Optional: Amazon Managed Blockchain (Hyperledger Fabric) ────────────
+  FabricMember:
+    Type: AWS::ManagedBlockchain::Member
+    Condition: WithBlockchain
+    Properties:
+      NetworkConfiguration:
+        Name: !Sub trustline-${Stage}
+        Framework: HYPERLEDGER_FABRIC
+        FrameworkVersion: "2.2"
+        NetworkFrameworkConfiguration:
+          NetworkFabricConfiguration: { Edition: STARTER }
+        VotingPolicy:
+          ApprovalThresholdPolicy:
+            ThresholdPercentage: 50
+            ProposalDurationInHours: 24
+            ThresholdComparator: GREATER_THAN
+      MemberConfiguration:
+        Name: trustline-operator
+        MemberFrameworkConfiguration:
+          MemberFabricConfiguration:
+            AdminUsername: !Ref FabricAdminUsername
+            AdminPassword: !Ref FabricAdminPassword
+
+  FabricPeer:
+    Type: AWS::ManagedBlockchain::Node
+    Condition: WithBlockchain
+    Properties:
+      NetworkId: !GetAtt FabricMember.NetworkId
+      MemberId: !GetAtt FabricMember.MemberId
+      NodeConfiguration:
+        InstanceType: bc.t3.small
+        AvailabilityZone: !Select [0, !GetAZs ""]
+
+Outputs:
+  DYNAMODB_TABLE: { Value: !Ref Table }
+  S3_BUCKET: { Value: !Ref EvidenceBucket }
+  COGNITO_USER_POOL_ID: { Value: !Ref UserPool }
+  COGNITO_CLIENT_ID: { Value: !Ref UserPoolClient }
+  VERIFIED_PERMISSIONS_POLICY_STORE: { Value: !Ref PolicyStore }
+  STRANDS_AGENT_URL: { Value: !Sub "https://${AgentApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/interpret" }
+  APP_ROLE_ARN: { Value: !GetAtt AppRole.Arn }
+  FABRIC_NETWORK_ID:
+    Condition: WithBlockchain
+    Value: !GetAtt FabricMember.NetworkId

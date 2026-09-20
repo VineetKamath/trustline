@@ -1,0 +1,236 @@
+{
+  "Trustline": {
+    "entityTypes": {
+      "Claim": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "supported": {
+              "type": "EntityOrCommon",
+              "name": "Bool"
+            },
+            "unit": {
+              "type": "EntityOrCommon",
+              "name": "String"
+            }
+          }
+        }
+      },
+      "Credential": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "holder": {
+              "type": "EntityOrCommon",
+              "name": "Holder"
+            },
+            "issuer": {
+              "type": "EntityOrCommon",
+              "name": "Issuer"
+            }
+          }
+        }
+      },
+      "CredentialType": {},
+      "Holder": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "trustlineId": {
+              "type": "EntityOrCommon",
+              "name": "String"
+            }
+          }
+        }
+      },
+      "Issuer": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "allowedCredentialTypes": {
+              "type": "Set",
+              "element": {
+                "type": "EntityOrCommon",
+                "name": "CredentialType"
+              }
+            },
+            "registered": {
+              "type": "EntityOrCommon",
+              "name": "Bool"
+            }
+          }
+        }
+      },
+      "VerificationRequest": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "status": {
+              "type": "EntityOrCommon",
+              "name": "String"
+            },
+            "subject": {
+              "type": "EntityOrCommon",
+              "name": "Holder"
+            },
+            "verifier": {
+              "type": "EntityOrCommon",
+              "name": "Verifier"
+            }
+          }
+        }
+      },
+      "Verifier": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "allowedPurposes": {
+              "type": "Set",
+              "element": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              }
+            },
+            "registered": {
+              "type": "EntityOrCommon",
+              "name": "Bool"
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "ApproveVerification": {
+        "appliesTo": {
+          "resourceTypes": [
+            "VerificationRequest"
+          ],
+          "principalTypes": [
+            "Holder"
+          ]
+        }
+      },
+      "IssueCredential": {
+        "appliesTo": {
+          "resourceTypes": [
+            "CredentialType"
+          ],
+          "principalTypes": [
+            "Issuer"
+          ]
+        }
+      },
+      "RequestFullHistory": {
+        "appliesTo": {
+          "resourceTypes": [
+            "Claim"
+          ],
+          "principalTypes": [
+            "Verifier"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "disclosure": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "purpose": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              }
+            }
+          }
+        }
+      },
+      "RequestIdentity": {
+        "appliesTo": {
+          "resourceTypes": [
+            "Claim"
+          ],
+          "principalTypes": [
+            "Verifier"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "disclosure": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "purpose": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              }
+            }
+          }
+        }
+      },
+      "RequestPredicateProof": {
+        "appliesTo": {
+          "resourceTypes": [
+            "Claim"
+          ],
+          "principalTypes": [
+            "Verifier"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "disclosure": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "operator": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "purpose": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "threshold": {
+                "type": "EntityOrCommon",
+                "name": "Long"
+              }
+            }
+          }
+        }
+      },
+      "RequestRawValue": {
+        "appliesTo": {
+          "resourceTypes": [
+            "Claim"
+          ],
+          "principalTypes": [
+            "Verifier"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "disclosure": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              },
+              "purpose": {
+                "type": "EntityOrCommon",
+                "name": "String"
+              }
+            }
+          }
+        }
+      },
+      "RevokeCredential": {
+        "appliesTo": {
+          "resourceTypes": [
+            "Credential"
+          ],
+          "principalTypes": [
+            "Issuer",
+            "Holder"
+          ]
+        }
+      }
+    }
+  }
+}

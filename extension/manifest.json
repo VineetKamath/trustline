@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Trustline",
+  "version": "0.1.0",
+  "description": "See verified behavioural history for sellers and hosts — without anyone's private data. Prototype.",
+  "action": {
+    "default_title": "Trustline",
+    "default_popup": "popup/popup.html"
+  },
+  "host_permissions": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:3000/marketplace*", "http://127.0.0.1:3000/marketplace*"],
+      "js": ["content/content.js"],
+      "css": ["styles/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
